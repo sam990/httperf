@@ -1231,6 +1231,9 @@ core_exit(void)
 {
 	running = 0;
 
+	fdset_destroy(rdfds);
+	fdset_destroy(wrfds);
+
 	printf("Maximum connect burst length: %lu\n", max_burst_len);
 
 #ifdef TIME_SYSCALLS

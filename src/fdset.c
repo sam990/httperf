@@ -226,7 +226,7 @@ void __fdset_iter_update(fdset *set) {
     for (int k = set->current_elem + 1; k < set->set_size; k++) {
         if (fdset_contains(set, k)) {
             set->current_elem = k;
-            break;
+            return;
         }
     }
     // otherwise set current_elem to -1
