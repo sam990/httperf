@@ -1,40 +1,39 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ(2.60)
-AC_INIT(httperf, 0.9.1, httperf@linux.hpl.hp.com)
+AC_PREREQ([2.71])
+AC_INIT([httperf],[0.9.1],[httperf@linux.hpl.hp.com])
 AC_CONFIG_SRCDIR([src/httperf.c])
-AC_CONFIG_HEADER([config.h])
+AC_CONFIG_HEADERS([config.h])
 
 AC_CANONICAL_TARGET
 
-AM_INIT_AUTOMAKE(httperf, 0.9.1)
+AM_INIT_AUTOMAKE
 
 # Checks for programs.
-AC_GNU_SOURCE
+AC_USE_SYSTEM_EXTENSIONS
 AC_PROG_CC([cc gcc])
-AC_PROG_CC_C99
 
 AC_PROG_INSTALL
-AC_PROG_LIBTOOL
+LT_INIT
 
 # Are we building the idleconn program?
 AC_ARG_ENABLE([idleconn],
-	AS_HELP_STRING([--enable-idleconn],
-		[Build the idleconn program (default=no), requires libevent]),
-	[enable_idleconn=$enableval],
-	[enable_idleconn=no])
+        AS_HELP_STRING([--enable-idleconn],
+                [Build the idleconn program (default=no), requires libevent]),
+        [enable_idleconn=$enableval],
+        [enable_idleconn=no])
 
 if test "$enable_idleconn" = "yes"; then
 AC_CHECK_LIB([event],
-	[event_init],
-	,
-	[AC_MSG_ERROR([libevent is required to build idleconn])])
+        [event_init],
+        ,
+        [AC_MSG_ERROR([libevent is required to build idleconn])])
 fi
 
 
 AM_CONDITIONAL(IDLECONN, 
-	[test "x$enable_idleconn" = xyes])
+        [test "x$enable_idleconn" = xyes])
 
 # Checks for libraries.
 AC_CHECK_LIB(m, sqrt)
@@ -48,12 +47,12 @@ AC_SEARCH_LIBS([inet_aton], [resolv])
 
 # Checks for header files.
 AC_FUNC_ALLOCA
-AC_HEADER_TIME
+
 AC_CHECK_HEADERS([openssl/ssl.h getopt.h])
 
 if test "$ac_cv_header_openssl_ssl_h" = "yes" \
-	-a "$ac_cv_lib_ssl_SSL_version" = "yes" \
-	-a "$ac_cv_lib_crypto_main" = "yes"; then
+        -a "$ac_cv_lib_ssl_SSL_version" = "yes" \
+        -a "$ac_cv_lib_crypto_main" = "yes"; then
   CFLAGS="${CFLAGS} -DHAVE_SSL"
   LDFLAGS="${LDFLAGS}"  
 fi
@@ -70,15 +69,15 @@ AC_CHECK_TYPE(u_long, unsigned long)
 # Check for unsigned long long int (stat/basic.c)
 AC_TYPE_UNSIGNED_LONG_LONG_INT
 if test "$ac_cv_type_unsigned_long_long_int" != "yes" ; then
-	AC_CHECK_TYPE(u_wide, unsigned long)
+        AC_CHECK_TYPE(u_wide, unsigned long)
 else
-	AC_CHECK_TYPE(u_wide, unsigned long long)
+        AC_CHECK_TYPE(u_wide, unsigned long long)
 fi
 
 # Checks for library functions.
 AC_FUNC_MMAP
 AC_FUNC_SELECT_ARGTYPES
-AC_TYPE_SIGNAL
+
 AC_FUNC_STRTOD
 AC_FUNC_VPRINTF
 AC_CHECK_FUNCS([getopt_long])
@@ -91,4 +90,5 @@ if test "$enable_debug" = yes; then
       CFLAGS="${CFLAGS} -DDEBUG"
 fi
 
-AC_OUTPUT(Makefile man/Makefile src/stat/Makefile src/lib/Makefile src/gen/Makefile src/Makefile)
+AC_CONFIG_FILES([Makefile man/Makefile src/stat/Makefile src/lib/Makefile src/gen/Makefile src/Makefile])
+AC_OUTPUT
