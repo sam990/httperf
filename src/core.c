@@ -433,7 +433,7 @@ do_send(Conn * conn)
 			 */
 			call->timeout =
 			    param.timeout ? timer_now() + param.timeout : 0.0;
-			set_active(conn, &wrfds);
+			set_active(conn, wrfds);
 			return;
 		}
 
@@ -467,7 +467,7 @@ do_send(Conn * conn)
 		call->timeout = param.timeout + param.think_timeout;
 		if (call->timeout > 0.0)
 			call->timeout += timer_now();
-		set_active(conn, &rdfds);
+		set_active(conn, rdfds);
 		if (conn->state < S_REPLY_STATUS)
 			conn->state = S_REPLY_STATUS;	/* expecting reply
 							 * status */
@@ -601,7 +601,7 @@ do_recv(Conn * s)
 	while (buf_len > 0);
 
 	if (s->recvq)
-		set_active(c->conn, &rdfds);
+		set_active(c->conn, rdfds);
 }
 
 struct sockaddr_in *
@@ -744,11 +744,11 @@ core_ssl_connect(Conn * s)
 			if (reason == SSL_ERROR_WANT_READ
 			    && !fdset_contains(rdfds, s->sd) ) {
 				fdset_remove(wrfds, s->sd);
-				set_active(s, &rdfds);
+				set_active(s, rdfds);
 			} else if (reason == SSL_ERROR_WANT_WRITE
 				   && !fdset_contains(wrfds, s->sd)) {
 				fdset_remove(rdfds, s->sd);
-				set_active(s, &wrfds);
+				set_active(s, wrfds);
 			}
 			return;
 		}
@@ -939,7 +939,7 @@ core_connect(Conn * s)
 		 * connection establishment.  
 		 */
 		s->state = S_CONNECTING;
-		set_active(s, &wrfds);
+		set_active(s, wrfds);
 		if (param.timeout > 0.0) {
 			arg.vp = s;
 			assert(!s->watchdog);
@@ -1040,7 +1040,7 @@ core_send(Conn * conn, Call * call)
 			return -1;
 		call->timeout =
 		    param.timeout ? timer_now() + param.timeout : 0.0;
-		set_active(conn, &wrfds);
+		set_active(conn, wrfds);
 	} else {
 		conn->sendq_tail->sendq_next = call;
 		conn->sendq_tail = call;
