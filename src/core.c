@@ -44,9 +44,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#ifdef HAVE_SYS_SELECT_H
-#include <sys/select.h>
-#endif
+#include <poll.h>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -63,6 +61,7 @@
 #include <core.h>
 #include <localevent.h>
 #include <http.h>
+#include <fdset.h>
 
 #define HASH_TABLE_SIZE	1024	/* can't have more than this many servers */
 #define MIN_IP_PORT	IPPORT_RESERVED
@@ -72,7 +71,7 @@
 static int      running = 1;
 static int      iteration;
 static u_long   max_burst_len;
-static fd_set   rdfds, wrfds;
+static fdset   *rdfds, *wrfds;
 static int      min_sd = 0x7fffffff, max_sd = 0, alloced_sd_to_conn = 0;
 static struct timeval select_timeout;
 static struct sockaddr_in myaddr;
@@ -297,10 +296,10 @@ conn_timeout(struct Timer *t, Any_Type arg)
 		c = 0;
 		if (s->sd >= 0) {
 			now = timer_now();
-			if (FD_ISSET(s->sd, &rdfds)
+			if (fdset_contains(rdfds, s->sd)
 				&& s->recvq && now >= s->recvq->timeout)
 				c = s->recvq;
-			else if (FD_ISSET(s->sd, &wrfds)
+			else if (fdset_contains(wrfds, s->sd)
 				&& s->sendq && now >= s->sendq->timeout)
 				c = s->sendq;
 		}
@@ -319,13 +318,13 @@ conn_timeout(struct Timer *t, Any_Type arg)
 }
 
 static void
-set_active(Conn * s, fd_set * fdset)
+set_active(Conn * s, fdset *fdset)
 {
  	int             sd = s->sd;
 	Any_Type        arg;
 	Time            timeout;
 
-	FD_SET(sd, fdset);
+	fdset_add(fdset, sd);
 	if (sd < min_sd)
 		min_sd = sd;
 	if (sd >= max_sd)
@@ -444,7 +443,7 @@ do_send(Conn * conn)
 		conn->sendq = call->sendq_next;
 		if (!conn->sendq) {
 			conn->sendq_tail = 0;
-			FD_CLR(sd, &wrfds);
+			fdset_remove(wrfds, sd);
 		}
 		arg.l = 0;
 		event_signal(EV_CALL_SEND_STOP, (Object *) call, arg);
@@ -491,7 +490,7 @@ recv_done(Call * call)
 
 	conn->recvq = call->recvq_next;
 	if (!conn->recvq) {
-		FD_CLR(conn->sd, &rdfds);
+		fdset_remove(rdfds, conn->sd);
 		conn->recvq_tail = 0;
 	}
 	/*
@@ -651,9 +650,8 @@ core_init(void)
 	struct rlimit   rlimit;
 
 	memset(&hash_table, 0, sizeof(hash_table));
-	memset(&rdfds, 0, sizeof(rdfds));
-	memset(&wrfds, 0, sizeof(wrfds));
-	memset(&myaddr, 0, sizeof(myaddr));
+	rdfds = fdset_init();
+	wrfds = fdset_init();
 	memset(&port_free_map, 0xff, sizeof(port_free_map));
 
 	/*
@@ -744,12 +742,12 @@ core_ssl_connect(Conn * s)
 					 SSL_ERROR_WANT_READ) ? "read" :
 					"write");
 			if (reason == SSL_ERROR_WANT_READ
-			    && !FD_ISSET(s->sd, &rdfds)) {
-				FD_CLR(s->sd, &wrfds);
+			    && !fdset_contains(rdfds, s->sd) ) {
+				fdset_remove(wrfds, s->sd);
 				set_active(s, &rdfds);
 			} else if (reason == SSL_ERROR_WANT_WRITE
-				   && !FD_ISSET(s->sd, &wrfds)) {
-				FD_CLR(s->sd, &rdfds);
+				   && !fdset_contains(wrfds, s->sd)) {
+				fdset_remove(rdfds, s->sd);
 				set_active(s, &wrfds);
 			}
 			return;
@@ -1099,8 +1097,8 @@ core_close(Conn * conn)
 	if (sd >= 0) {
 		close(sd);
 		sd_to_conn[sd] = 0;
-		FD_CLR(sd, &wrfds);
-		FD_CLR(sd, &rdfds);
+		fdset_remove(wrfds, sd);
+		fdset_remove(rdfds, sd);
 	}
 	if (conn->myport > 0)
 		port_put(conn->myport);
@@ -1113,99 +1111,118 @@ core_close(Conn * conn)
 	conn_dec_ref(conn);
 }
 
+size_t
+populate_pollfds(struct pollfd *fds, size_t fds_max_size,  fdset *readset, fdset *writeset) {
+	size_t max_size = readset->set_size > writeset->set_size ? readset->set_size : writeset->set_size;
+	assert(fds_max_size >= max_size);
+	uint8_t tfds[max_size];
+
+	memset(tfds, 0, max_size);
+
+	for (int fd_i = fdset_iter_begin(readset); fdset_iter_more(readset); fd_i = fdset_iter_next(readset)) {
+		tfds[fd_i] |= 1;
+	}
+
+	for (int fd_i = fdset_iter_begin(writeset); fdset_iter_more(writeset); fd_i = fdset_iter_next(writeset)) {
+		tfds[fd_i] |= 2;
+	}
+
+	size_t n = 0; // number of elements in pollfd array
+
+	for (int fd_i = 0; fd_i < max_size; fd_i++) {
+		if (tfds[fd_i]) {
+			fds[n].fd = fd_i;
+			fds[n].events = ( tfds[fd_i] & 0x1 ? POLLIN : 0 ) | (tfds[fd_i] & 0x2 ? POLLOUT : 0 );
+			fds[n].revents = 0;
+			n++;
+		}
+	}
+
+	return n;
+}
+
 void
 core_loop(void)
 {
 	int        is_readable, is_writable, n, sd, bit, min_i, max_i, i = 0;
-	fd_set     readable, writable;
-	fd_mask    mask;
 	Any_Type   arg;
 	Conn      *conn;
- 
+
 	while (running) {
 	    struct timeval  tv = select_timeout;
+		int timeout = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
 
 	    timer_tick();
 
-	    readable = rdfds;
-	    writable = wrfds;
+		size_t fd_max_size = rdfds->set_size > wrfds->set_size ? rdfds->set_size : wrfds->set_size;
+		
+		struct pollfd fds[fd_max_size];
+
+		size_t nfds = populate_pollfds(fds, fd_max_size, rdfds, wrfds);
+
 	    min_i = min_sd / NFDBITS;
 	    max_i = max_sd / NFDBITS;
 
-	    SYSCALL(SELECT,	n = select(max_sd + 1, &readable, &writable, 0, &tv));
+	    SYSCALL(POLL,	n = poll(fds, nfds, timeout));
 
 	    ++iteration;
 
 	    if (n <= 0) {
 	        if (n < 0) {
-	            fprintf(stderr, "%s.core_loop: select failed: %s\n", prog_name, strerror(errno));
+	            fprintf(stderr, "%s.core_loop: poll failed: %s\n", prog_name, strerror(errno));
 	            exit(1);
 	        }
 	        continue;
 	    }
 
-	    while (n > 0) {
-	        /*
-	         * find the index of the fdmask that has something
-	         * going on: 
-	         */
-	        do {
-	            ++i;
-	            if (i > max_i)
-	                i = min_i;
+		for (int nf_i = 0; nf_i < nfds; nf_i++ ) {
+			if (!(fds[nf_i].revents)) {
+				continue;
+			}
 
-	            assert(i <= max_i);
-	            mask = readable.fds_bits[i] | writable.fds_bits[i];
-	        } while (!mask);
-	        bit = 0;
-	        sd = i * NFDBITS + bit;
-	        do {
-	            if (mask & 1) {
-	                --n;
-	                is_readable = (FD_ISSET(sd, &readable) && FD_ISSET(sd, &rdfds));
-	                is_writable = (FD_ISSET(sd, &writable) && FD_ISSET(sd, &wrfds));
-	                
-	                if (is_readable || is_writable) {
-	                    /*
-	                     * only handle sockets that
-	                     * haven't timed out yet
-	                     */
-	                    conn = sd_to_conn[sd];
-	                    conn_inc_ref(conn);
+			n--;
+			sd = fds[nf_i].fd;
 
-	                    if (conn->watchdog) {
-	                        timer_cancel(conn->watchdog);
-	                        conn->watchdog = 0;
-	                    }
-	                    if (conn->state == S_CONNECTING) {
+			is_readable = ((fds[nf_i].revents & POLLIN) && fdset_contains(rdfds, sd));
+	        is_writable = ((fds[nf_i].revents & POLLOUT) && fdset_contains(wrfds, sd));
+
+			if (is_readable || is_writable) {
+				/*
+					* only handle sockets that
+					* haven't timed out yet
+					*/
+				conn = sd_to_conn[sd];
+				conn_inc_ref(conn);
+
+				if (conn->watchdog) {
+					timer_cancel(conn->watchdog);
+					conn->watchdog = 0;
+				}
+				if (conn->state == S_CONNECTING) {
 #ifdef HAVE_SSL
-	                        if (param.use_ssl)
-	                             core_ssl_connect(conn);
-	                        else
+					if (param.use_ssl)
+							core_ssl_connect(conn);
+					else
 #endif
-	                        if (is_writable) {
-	                            FD_CLR(sd, &wrfds);
-	                            conn->state = S_CONNECTED;
-	                            arg.l = 0;
-	                            event_signal(EV_CONN_CONNECTED, (Object*)conn, arg);
-	                        }
-	                    } else {
-	                        if (is_writable && conn->sendq)
-	                            do_send(conn);
-	                        if (is_readable && conn->recvq)
-	                            do_recv(conn);
-	                    }
-	                    
-	                    conn_dec_ref(conn);
-	                    
-	                    if (n > 0)
-	                         timer_tick();
-	                }
-	            }
-	            mask = ((u_long) mask) >> 1;
-	            ++sd;
-	        } while (mask);
-	    }
+					if (is_writable) {
+						fdset_remove(wrfds, sd);
+						conn->state = S_CONNECTED;
+						arg.l = 0;
+						event_signal(EV_CONN_CONNECTED, (Object*)conn, arg);
+					}
+				} else {
+					if (is_writable && conn->sendq)
+						do_send(conn);
+					if (is_readable && conn->recvq)
+						do_recv(conn);
+				}
+				
+				conn_dec_ref(conn);
+				
+				if (n > 0)
+						timer_tick();
+			}
+		}
 	}
 }
 

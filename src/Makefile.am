@@ -13,6 +13,6 @@ endif
 
 httperf_SOURCES = httperf.c httperf.h object.c object.h call.c call.h conn.c \
   conn.h sess.c sess.h core.c core.h localevent.c localevent.h http.c http.h \
-  timer.c timer.h
+  timer.c timer.h fdset.c fdset.h
 
 httperf_LDADD = gen/libgen.a lib/libutil.a stat/libstat.a
