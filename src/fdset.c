@@ -51,6 +51,8 @@ fdset* fdset_clone(fdset* set) {
     for (int i = 0; i < NUM_MAJOR_CNT(set->set_size); i++) {
         new_set->set_elems[i] = set->set_elems[i];
     }
+
+    return new_set;
 }
 
 void fdset_clear(fdset *set) {
@@ -88,7 +90,7 @@ int fdset_add(fdset *set, int elem) {
     uint64_t mask = ELEM_MASK(elem);
 
     set->set_elems[majorIdx] |= mask;
-
+    return FDSET_SUCCESS;
 }
 
 int fdset_remove(fdset *set, int elem) {
@@ -106,6 +108,7 @@ int fdset_remove(fdset *set, int elem) {
 
     set->set_elems[majorIdx] &= (~mask);
 
+    return FDSET_SUCCESS;
 }
 
 
