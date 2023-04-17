@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.71])
-AC_INIT([httperf],[0.9.1],[httperf@linux.hpl.hp.com])
+AC_INIT([httperf],[0.9.2],[httperf@linux.hpl.hp.com])
 AC_CONFIG_SRCDIR([src/httperf.c])
 AC_CONFIG_HEADERS([config.h])
 
